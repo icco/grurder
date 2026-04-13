@@ -7,8 +7,10 @@
 -- 8mu faders control generation
 -- outputs two voices to mmMidi
 --
--- E1 tempo  E2 probability  E3 root
+-- E1 tempo  E2 octave  E3 root
 -- K2 page   K3 reset/random (short/long)
+-- 8mu faders 1-4: seq1 (steps/pulses/rot/prob)
+-- 8mu faders 5-8: seq2 (steps/pulses/rot/prob)
 
 local util = require "util"
 
@@ -40,14 +42,16 @@ local redraw_metro = nil
 local seq_clock = nil
 local k3_held = false
 
-local step_count = 8
-local pulse_count = 5
-local rotation = 0
-local flip_prob = 0.0
 local scale_idx = 1
 local root = 0
 local octave_range = 2
 local tempo = 120
+
+-- per-sequence parameters (indexed 1=seq1, 2=seq2)
+local step_count = {8, 8}
+local pulse_count = {5, 5}
+local rotation = {0, 0}
+local flip_prob = {0.0, 0.0}
 
 local seq = {
   {
@@ -161,16 +165,14 @@ end
 
 -- pattern computation
 
-function recompute_patterns()
-  local p1 = bjorklund(step_count, pulse_count)
-  seq[1].pattern = rotate_pattern(p1, rotation)
+function recompute_pattern(n)
+  local p = bjorklund(step_count[n], pulse_count[n])
+  seq[n].pattern = rotate_pattern(p, rotation[n])
+end
 
-  -- seq 2: complementary rhythm (fills the gaps)
-  local comp_pulses = step_count - pulse_count
-  if comp_pulses < 1 then comp_pulses = 1 end
-  local p2 = bjorklund(step_count, comp_pulses)
-  local comp_rotation = (rotation + math.floor(step_count / 2)) % step_count
-  seq[2].pattern = rotate_pattern(p2, comp_rotation)
+function recompute_patterns()
+  recompute_pattern(1)
+  recompute_pattern(2)
 end
 
 
@@ -188,43 +190,37 @@ function handle_midi(data)
 
   elseif msg.type == "note_on" and msg.vel > 0 then
     if msg.note == 36 then
-      -- button A: reset
+      -- button A: reset sequences
       reset_sequences()
     elseif msg.note == 48 then
       -- button B: randomize registers
       randomize_registers()
     elseif msg.note == 60 then
-      -- button C: toggle seq 2 mute
-      seq[2].mute = not seq[2].mute
+      -- button C: toggle seq 1 mute
+      seq[1].mute = not seq[1].mute
     elseif msg.note == 72 then
-      -- button D: cycle scale
-      scale_idx = (scale_idx % #scales) + 1
-      cc[5] = math.floor((scale_idx - 1) / #scales * 127)
+      -- button D: toggle seq 2 mute
+      seq[2].mute = not seq[2].mute
     end
   end
 end
 
 function apply_cc(idx, val)
-  if idx == 1 then
-    step_count = math.floor(util.linlin(0, 127, 4, 16, val) + 0.5)
-    recompute_patterns()
-  elseif idx == 2 then
-    pulse_count = math.floor(util.linlin(0, 127, 1, step_count, val) + 0.5)
-    recompute_patterns()
-  elseif idx == 3 then
-    rotation = math.floor(util.linlin(0, 127, 0, step_count - 1, val) + 0.5)
-    recompute_patterns()
-  elseif idx == 4 then
-    flip_prob = val / 127
-  elseif idx == 5 then
-    scale_idx = math.floor(util.linlin(0, 127, 1, #scales, val) + 0.5)
-  elseif idx == 6 then
-    root = math.floor(util.linlin(0, 127, 0, 11, val) + 0.5)
-  elseif idx == 7 then
-    octave_range = math.floor(util.linlin(0, 127, 1, 4, val) + 0.5)
-  elseif idx == 8 then
-    tempo = math.floor(util.linlin(0, 127, 40, 240, val) + 0.5)
-    params:set("clock_tempo", tempo)
+  -- faders 1-4: seq1, faders 5-8: seq2
+  local n = idx <= 4 and 1 or 2
+  local param = idx <= 4 and idx or (idx - 4)
+
+  if param == 1 then
+    step_count[n] = math.floor(util.linlin(0, 127, 4, 16, val) + 0.5)
+    recompute_pattern(n)
+  elseif param == 2 then
+    pulse_count[n] = math.floor(util.linlin(0, 127, 1, step_count[n], val) + 0.5)
+    recompute_pattern(n)
+  elseif param == 3 then
+    rotation[n] = math.floor(util.linlin(0, 127, 0, step_count[n] - 1, val) + 0.5)
+    recompute_pattern(n)
+  elseif param == 4 then
+    flip_prob[n] = val / 127
   end
 end
 
@@ -269,7 +265,7 @@ function advance(n)
   s.pos = (s.pos % #pat) + 1
 
   if pat[s.pos] and not s.mute then
-    s.register = shift_register_step(s.register, flip_prob)
+    s.register = shift_register_step(s.register, flip_prob[n])
     local sc = scales[scale_idx] or scales[1]
     local midi_note = register_to_note(s.register, sc, root, octave_range)
     -- clamp to valid midi range
@@ -308,7 +304,7 @@ function draw_sequences()
   screen.move(64, 7)
   screen.text_center(note_names[root + 1] .. " " .. scale_names[scale_idx])
   screen.move(127, 7)
-  screen.text_right(tempo .. "bpm")
+  screen.text_right(tempo .. "bpm o" .. octave_range)
 
   -- seq 1
   draw_seq_lane(seq[1], 10, 34)
@@ -387,9 +383,11 @@ end
 function draw_faders()
   screen.level(6)
   screen.move(1, 7)
-  screen.text("8mu")
+  screen.text("seq1")
+  screen.move(68, 7)
+  screen.text("seq2")
 
-  local labels = {"stp", "pls", "rot", "prb", "scl", "roo", "oct", "bpm"}
+  local labels = {"stp", "pls", "rot", "prb", "stp", "pls", "rot", "prb"}
   local bar_w = 12
   local gap = (128 - bar_w * 8) / 9
   local base_y = 56
@@ -433,6 +431,16 @@ function init()
   params:add_number("midi_out_device", "midi out", 1, 16, 2)
   params:set_action("midi_out_device", function(val)
     midi_out_dev = midi.connect(val)
+  end)
+
+  params:add_option("scale", "scale", scale_names, 1)
+  params:set_action("scale", function(val)
+    scale_idx = val
+  end)
+
+  params:add_number("octave_range", "octave range", 1, 4, 2)
+  params:set_action("octave_range", function(val)
+    octave_range = val
   end)
 
   -- connect midi
@@ -480,14 +488,11 @@ function enc(n, d)
   if n == 1 then
     tempo = util.clamp(tempo + d, 40, 240)
     params:set("clock_tempo", tempo)
-    cc[8] = math.floor(util.linlin(40, 240, 0, 127, tempo))
   elseif n == 2 then
-    flip_prob = util.clamp(flip_prob + d * 0.02, 0, 1)
-    cc[4] = math.floor(flip_prob * 127)
+    octave_range = util.clamp(octave_range + d, 1, 4)
   elseif n == 3 then
     root = (root + d) % 12
     if root < 0 then root = root + 12 end
-    cc[6] = math.floor(root / 11 * 127)
   end
   redraw()
 end
