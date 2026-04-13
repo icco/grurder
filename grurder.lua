@@ -438,11 +438,6 @@ function init()
     scale_idx = val
   end)
 
-  params:add_number("octave_range", "octave range", 1, 4, 2)
-  params:set_action("octave_range", function(val)
-    octave_range = val
-  end)
-
   -- connect midi
   midi_in_dev = midi.connect(params:get("midi_in_device"))
   midi_in_dev.event = handle_midi
