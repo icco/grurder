@@ -32,7 +32,7 @@ local scale_names = {
 local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
 
 -- state
-local midi_in_dev = nil
+local midi_in_dev = nil -- luacheck: no unused
 local midi_out_dev = nil
 local page = 1
 local cc = {0, 0, 0, 0, 0, 0, 0, 0}
