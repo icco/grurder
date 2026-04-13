@@ -18,13 +18,13 @@ From the norns maiden REPL:
 
 ## How It Works
 
-grurder generates two complementary melodic sequences using a combination of Euclidean rhythms and a shift-register pitch generator. The 8mu's faders shape the generative parameters in real time.
+grurder generates two independent melodic sequences using a combination of Euclidean rhythms and a shift-register pitch generator. The 8mu's faders shape the generative parameters in real time — faders 1–4 control sequence 1, faders 5–8 control sequence 2.
 
 ### Euclidean Rhythms
 
 The rhythm for each voice is generated using the Björklund algorithm, which distributes a given number of pulses as evenly as possible across a number of steps. This produces patterns found across many musical traditions — for example, 5 pulses across 8 steps yields a pattern common in West African music.
 
-Voice 1 uses the fader-controlled step count, pulse count, and rotation directly. Voice 2 automatically uses the complementary pattern (it fills the gaps left by voice 1) with an offset rotation, creating interlocking rhythms.
+Each sequence has its own independently controlled step count, pulse count, and rotation, allowing fully independent rhythmic patterns.
 
 Reference: Godfried Toussaint, "The Euclidean Algorithm Generates Traditional Musical Rhythms" (2005). Proceedings of BRIDGES: Mathematical Connections in Art, Music, and Science.
 
@@ -36,28 +36,24 @@ Pitch is determined by a 16-bit shift register inspired by Tom Whitwell's Turing
 - **Probability 1**: every wrapping bit is randomized, producing fully generative pitch
 - **In between**: the melody gradually evolves, drifting away from the original pattern
 
-Each voice has its own independent register but shares the same flip probability, scale, and root note. The register value is mapped to a scale degree and octave to produce the output MIDI note.
+Each voice has its own independent register and flip probability. They share the same scale, root note, and octave range. The register value is mapped to a scale degree and octave to produce the output MIDI note.
 
 Reference: Tom Whitwell / Music Thing Modular, [Turing Machine](https://www.musicthing.co.uk/Turing-Machine/).
-
-### Complementary Counterpoint
-
-Voice 2's rhythm is the complement of voice 1 — if voice 1 has 5 pulses in 8 steps, voice 2 has 3 pulses in 8 steps, offset by half the step length. This means when voice 1 is dense, voice 2 is sparse, and vice versa. Combined with independent pitch registers, this creates a natural two-voice counterpoint.
 
 ## 8mu Fader Mapping
 
 The 8mu's faders (CC 34–41) map to:
 
-| Fader | CC | Parameter | Range |
-|-------|-----|-----------|-------|
-| 1 | 34 | Step count | 4–16 |
-| 2 | 35 | Pulse count | 1–steps |
-| 3 | 36 | Rotation | 0–steps-1 |
-| 4 | 37 | Flip probability | 0 (locked) – 1 (random) |
-| 5 | 38 | Scale | major, minor, pentatonic, dorian, phrygian, lydian, mixolydian |
-| 6 | 39 | Root note | C through B |
-| 7 | 40 | Octave range | 1–4 |
-| 8 | 41 | Tempo | 40–240 BPM |
+| Fader | CC | Sequence | Parameter | Range |
+|-------|-----|----------|-----------|-------|
+| 1 | 34 | Seq 1 | Step count | 4–16 |
+| 2 | 35 | Seq 1 | Pulse count | 1–steps |
+| 3 | 36 | Seq 1 | Rotation | 0–steps-1 |
+| 4 | 37 | Seq 1 | Flip probability | 0 (locked) – 1 (random) |
+| 5 | 38 | Seq 2 | Step count | 4–16 |
+| 6 | 39 | Seq 2 | Pulse count | 1–steps |
+| 7 | 40 | Seq 2 | Rotation | 0–steps-1 |
+| 8 | 41 | Seq 2 | Flip probability | 0 (locked) – 1 (random) |
 
 ## 8mu Button Mapping
 
@@ -65,15 +61,15 @@ The 8mu's faders (CC 34–41) map to:
 |--------|------|--------|
 | A | C2 | Reset both sequences |
 | B | C3 | Randomize pitch registers |
-| C | C4 | Toggle voice 2 mute |
-| D | C5 | Cycle scale |
+| C | C4 | Toggle seq 1 mute |
+| D | C5 | Toggle seq 2 mute |
 
 ## Norns Controls
 
 The script is fully usable without 8mu via the norns hardware:
 
 - **E1**: Tempo
-- **E2**: Flip probability
+- **E2**: Octave range (1–4)
 - **E3**: Root note
 - **K2**: Toggle between sequence view and fader view
 - **K3** (short press): Reset sequences
@@ -81,16 +77,21 @@ The script is fully usable without 8mu via the norns hardware:
 
 ## Screens
 
-**Sequence view** (default): Shows both voices as horizontal step displays. Each column represents a recent step — height indicates pitch, brightness indicates recency. The current step is brightest. Dots along the bottom show the active Euclidean pattern. Header displays root note, scale, and tempo.
+**Sequence view** (default): Shows both voices as horizontal step displays. Each column represents a recent step — height indicates pitch, brightness indicates recency. The current step is brightest. Dots along the bottom show the active Euclidean pattern. Header displays root note, scale, tempo, and octave range.
 
-**Fader view**: Shows the current 8mu CC values as eight vertical bars with parameter labels.
+**Fader view**: Shows the current 8mu CC values as eight vertical bars labeled stp/pls/rot/prb for each sequence.
 
 ## MIDI Output
 
 - Voice 1 sends on MIDI channel 1
 - Voice 2 sends on MIDI channel 2
 - Velocity is fixed at 100 (suitable for gate-based eurorack setups)
-- MIDI device ports are configurable in the norns params menu
+### Norns Params Menu
+
+- **midi in** — MIDI input device (1–16, default 1)
+- **midi out** — MIDI output device (1–16, default 2)
+- **scale** — maj, min, M.pent, m.pent, dor, phry, lyd, mixo
+- **octave range** — 1–4 (default 2)
 
 ## References & Further Reading
 
