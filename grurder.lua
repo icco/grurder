@@ -1,58 +1,516 @@
--- Grurder
+-- grurder
 -- @icco
 --
--- A simple sequencer for grid and crow.
+-- generative midi sequencer
+-- euclidean rhythms + turing machine
+--
+-- 8mu faders control generation
+-- outputs two voices to mmMidi
+--
+-- E1 tempo  E2 probability  E3 root
+-- K1 page   K2 reset        K3 random
 
-local scope = {0,0}
-local rate = 1
+local util = require "util"
 
-function init()
-  crow.output[1].receive = function(v) out(1,v) end
-  crow.output[2].receive = function(v) out(2,v) end
+-- scales as semitone intervals from root
+local scales = {
+  {0, 2, 4, 5, 7, 9, 11},     -- major
+  {0, 2, 3, 5, 7, 8, 10},     -- minor
+  {0, 2, 4, 7, 9},            -- major pentatonic
+  {0, 2, 3, 5, 7},            -- minor pentatonic
+  {0, 2, 3, 5, 7, 9, 10},    -- dorian
+  {0, 1, 3, 5, 7, 8, 10},    -- phrygian
+  {0, 2, 4, 6, 7, 9, 11},    -- lydian
+  {0, 2, 4, 5, 7, 9, 10},    -- mixolydian
+}
 
-  r = metro.init()
-  r.time = 0.05
-  r.event = function()
-    crow.output[1].query()
-    crow.output[2].query()
-    redraw()
+local scale_names = {
+  "maj", "min", "M.pent", "m.pent",
+  "dor", "phry", "lyd", "mixo"
+}
+
+local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
+
+-- state
+local midi_in_dev = nil
+local midi_out_dev = nil
+local page = 1
+local cc = {0, 0, 0, 0, 0, 0, 0, 0}
+local redraw_metro = nil
+local seq_clock = nil
+
+local step_count = 8
+local pulse_count = 5
+local rotation = 0
+local flip_prob = 0.0
+local scale_idx = 1
+local root = 0
+local octave_range = 2
+local tempo = 120
+
+local seq = {
+  {
+    pattern = {},
+    register = 0,
+    pos = 0,
+    last_note = nil,
+    mute = false,
+    history = {},
+  },
+  {
+    pattern = {},
+    register = 0,
+    pos = 0,
+    last_note = nil,
+    mute = false,
+    history = {},
+  },
+}
+
+
+-- bjorklund algorithm
+-- attempt to evenly distribute pulses across steps
+-- see: Toussaint (2005) "The Euclidean Algorithm Generates Traditional Musical Rhythms"
+
+function bjorklund(steps, pulses)
+  if pulses >= steps then
+    local p = {}
+    for i = 1, steps do p[i] = true end
+    return p
   end
-  r:start()
+  if pulses <= 0 then
+    local p = {}
+    for i = 1, steps do p[i] = false end
+    return p
+  end
 
-  screen.level(15)
-  screen.aa(0)
-  screen.line_width(1)
+  local groups = {}
+  for i = 1, steps do
+    if i <= pulses then
+      groups[i] = {true}
+    else
+      groups[i] = {false}
+    end
+  end
+
+  while true do
+    local remainder = #groups - pulses
+    if remainder <= 1 then break end
+    local new_groups = {}
+    local merge_count = math.min(pulses, remainder)
+    for i = 1, merge_count do
+      local g = {}
+      for _, v in ipairs(groups[i]) do g[#g + 1] = v end
+      for _, v in ipairs(groups[#groups - merge_count + i]) do g[#g + 1] = v end
+      new_groups[i] = g
+    end
+    -- leftover groups that weren't merged
+    if pulses > remainder then
+      for i = merge_count + 1, pulses do
+        new_groups[#new_groups + 1] = groups[i]
+      end
+    end
+    groups = new_groups
+    pulses = merge_count
+  end
+
+  local result = {}
+  for _, g in ipairs(groups) do
+    for _, v in ipairs(g) do
+      result[#result + 1] = v
+    end
+  end
+  return result
 end
 
-function out(i,v)
-  scope[i] = v
+function rotate_pattern(pattern, offset)
+  local n = #pattern
+  if n == 0 then return pattern end
+  local r = {}
+  for i = 1, n do
+    local src = ((i - 1 + offset) % n) + 1
+    r[i] = pattern[src]
+  end
+  return r
+end
+
+
+-- shift register / turing machine
+-- 16-bit register evolves each step: shift right, conditionally flip the
+-- wrapping bit. at probability 0 the pattern locks; at 1 it's fully random.
+-- see: Tom Whitwell / Music Thing Modular "Turing Machine"
+
+function shift_register_step(reg, prob)
+  local high_bit = reg & 1
+  reg = reg >> 1
+  if math.random() < prob then
+    high_bit = 1 - high_bit
+  end
+  reg = reg | (high_bit << 15)
+  return reg
+end
+
+function register_to_note(reg, scale_tbl, root_note, oct_range)
+  local deg = (reg % #scale_tbl) + 1
+  local interval = scale_tbl[deg]
+  local oct = math.floor((reg / #scale_tbl) % oct_range)
+  return root_note + 36 + interval + (oct * 12)
+end
+
+
+-- pattern computation
+
+function recompute_patterns()
+  local p1 = bjorklund(step_count, pulse_count)
+  seq[1].pattern = rotate_pattern(p1, rotation)
+
+  -- seq 2: complementary rhythm (fills the gaps)
+  local comp_pulses = step_count - pulse_count
+  if comp_pulses < 1 then comp_pulses = 1 end
+  local p2 = bjorklund(step_count, comp_pulses)
+  local comp_rotation = (rotation + math.floor(step_count / 2)) % step_count
+  seq[2].pattern = rotate_pattern(p2, comp_rotation)
+end
+
+
+-- midi input handler
+
+function handle_midi(data)
+  local msg = midi.to_msg(data)
+
+  if msg.type == "cc" then
+    local idx = msg.cc - 33
+    if idx >= 1 and idx <= 8 then
+      cc[idx] = msg.val
+      apply_cc(idx, msg.val)
+    end
+
+  elseif msg.type == "note_on" and msg.vel > 0 then
+    if msg.note == 36 then
+      -- button A: reset
+      reset_sequences()
+    elseif msg.note == 48 then
+      -- button B: randomize registers
+      randomize_registers()
+    elseif msg.note == 60 then
+      -- button C: toggle seq 2 mute
+      seq[2].mute = not seq[2].mute
+    elseif msg.note == 72 then
+      -- button D: cycle scale
+      scale_idx = (scale_idx % #scales) + 1
+      cc[5] = math.floor((scale_idx - 1) / #scales * 127)
+    end
+  end
+end
+
+function apply_cc(idx, val)
+  if idx == 1 then
+    step_count = math.floor(util.linlin(0, 127, 4, 16, val) + 0.5)
+    recompute_patterns()
+  elseif idx == 2 then
+    pulse_count = math.floor(util.linlin(0, 127, 1, step_count, val) + 0.5)
+    recompute_patterns()
+  elseif idx == 3 then
+    rotation = math.floor(util.linlin(0, 127, 0, step_count - 1, val) + 0.5)
+    recompute_patterns()
+  elseif idx == 4 then
+    flip_prob = val / 127
+  elseif idx == 5 then
+    scale_idx = math.floor(util.linlin(0, 127, 1, #scales, val) + 0.5)
+  elseif idx == 6 then
+    root = math.floor(util.linlin(0, 127, 0, 11, val) + 0.5)
+  elseif idx == 7 then
+    octave_range = math.floor(util.linlin(0, 127, 1, 4, val) + 0.5)
+  elseif idx == 8 then
+    tempo = math.floor(util.linlin(0, 127, 40, 240, val) + 0.5)
+    params:set("clock_tempo", tempo)
+  end
+end
+
+function reset_sequences()
+  for i = 1, 2 do
+    seq[i].pos = 0
+  end
+end
+
+function randomize_registers()
+  for i = 1, 2 do
+    seq[i].register = math.random(0, 65535)
+  end
+end
+
+
+-- sequencer
+
+function note_off(ch, note)
+  if midi_out_dev and note then
+    midi_out_dev:note_off(note, 0, ch)
+  end
+end
+
+function note_on(ch, note)
+  if midi_out_dev then
+    midi_out_dev:note_on(note, 100, ch)
+  end
+end
+
+function advance(n)
+  local s = seq[n]
+  local pat = s.pattern
+  if #pat == 0 then return end
+
+  -- kill previous note
+  if s.last_note then
+    note_off(n, s.last_note)
+    s.last_note = nil
+  end
+
+  s.pos = (s.pos % #pat) + 1
+
+  if pat[s.pos] and not s.mute then
+    s.register = shift_register_step(s.register, flip_prob)
+    local sc = scales[scale_idx] or scales[1]
+    local midi_note = register_to_note(s.register, sc, root, octave_range)
+    -- clamp to valid midi range
+    midi_note = util.clamp(midi_note, 0, 127)
+    note_on(n, midi_note)
+    s.last_note = midi_note
+    -- push to history for display
+    s.history[#s.history + 1] = midi_note
+  else
+    s.history[#s.history + 1] = nil
+  end
+
+  -- keep history bounded
+  while #s.history > 32 do
+    table.remove(s.history, 1)
+  end
+end
+
+function run_sequencer()
+  while true do
+    clock.sync(1/4)
+    advance(1)
+    advance(2)
+    redraw()
+  end
+end
+
+
+-- screen: sequence view
+
+function draw_sequences()
+  -- header
+  screen.level(6)
+  screen.move(1, 7)
+  screen.text("grurder")
+  screen.move(64, 7)
+  screen.text_center(note_names[root + 1] .. " " .. scale_names[scale_idx])
+  screen.move(127, 7)
+  screen.text_right(tempo .. "bpm")
+
+  -- seq 1
+  draw_seq_lane(seq[1], 10, 34)
+
+  -- divider
+  screen.level(2)
+  screen.move(0, 36)
+  screen.line(128, 36)
+  screen.stroke()
+
+  -- seq 2
+  draw_seq_lane(seq[2], 38, 62)
+end
+
+function draw_seq_lane(s, y_top, y_bottom)
+  local h = y_bottom - y_top
+  local hist = s.history
+  local count = math.min(#hist, 16)
+  if count == 0 then return end
+
+  local col_w = math.floor(128 / 16)
+  local start = #hist - count + 1
+
+  -- find pitch range in history for scaling
+  local lo, hi = 127, 0
+  for i = start, #hist do
+    if hist[i] then
+      if hist[i] < lo then lo = hist[i] end
+      if hist[i] > hi then hi = hist[i] end
+    end
+  end
+  if lo == hi then lo = lo - 6; hi = hi + 6 end
+
+  for i = 0, count - 1 do
+    local note = hist[start + i]
+    local x = i * col_w
+    local brightness = s.mute and 2 or (i == count - 1 and 15 or util.linlin(0, count - 1, 3, 10, i))
+
+    if note then
+      local pitch_y = util.linlin(lo, hi, y_bottom - 2, y_top + 2, note)
+      screen.level(math.floor(brightness))
+      screen.rect(x + 1, math.floor(pitch_y), col_w - 2, 3)
+      screen.fill()
+    else
+      -- rest: small dot
+      screen.level(s.mute and 1 or 2)
+      screen.rect(x + 3, y_top + math.floor(h / 2), 2, 2)
+      screen.fill()
+    end
+  end
+
+  -- step indicator dots along the bottom
+  if #s.pattern > 0 then
+    for i = 1, #s.pattern do
+      if s.pattern[i] then
+        screen.level(i == s.pos and 15 or 3)
+      else
+        screen.level(1)
+      end
+      local dot_x = math.floor((i - 1) * (128 / #s.pattern))
+      screen.rect(dot_x + 1, y_bottom, 2, 1)
+      screen.fill()
+    end
+  end
+
+  if s.mute then
+    screen.level(4)
+    screen.move(64, y_top + math.floor(h / 2) + 2)
+    screen.text_center("MUTE")
+  end
+end
+
+
+-- screen: fader view
+
+function draw_faders()
+  screen.level(6)
+  screen.move(1, 7)
+  screen.text("8mu")
+
+  local labels = {"stp", "pls", "rot", "prb", "scl", "roo", "oct", "bpm"}
+  local bar_w = 12
+  local gap = (128 - bar_w * 8) / 9
+  local base_y = 56
+  local max_h = 42
+
+  for i = 1, 8 do
+    local x = math.floor(gap * i + bar_w * (i - 1))
+    local h = math.floor(cc[i] / 127 * max_h)
+
+    screen.level(12)
+    screen.rect(x, base_y - h, bar_w, h)
+    screen.fill()
+
+    -- outline
+    screen.level(3)
+    screen.rect(x, base_y - max_h, bar_w, max_h)
+    screen.stroke()
+
+    -- label
+    screen.level(6)
+    screen.move(x + math.floor(bar_w / 2), 63)
+    screen.text_center(labels[i])
+  end
+end
+
+
+-- norns callbacks
+
+function init()
+  math.randomseed(os.time())
+
+  -- params
+  params:add_separator("grurder")
+
+  params:add_number("midi_in_device", "midi in", 1, 16, 1)
+  params:set_action("midi_in_device", function(val)
+    midi_in_dev = midi.connect(val)
+    midi_in_dev.event = handle_midi
+  end)
+
+  params:add_number("midi_out_device", "midi out", 1, 16, 2)
+  params:set_action("midi_out_device", function(val)
+    midi_out_dev = midi.connect(val)
+  end)
+
+  -- connect midi
+  midi_in_dev = midi.connect(params:get("midi_in_device"))
+  midi_in_dev.event = handle_midi
+  midi_out_dev = midi.connect(params:get("midi_out_device"))
+
+  -- seed the registers
+  randomize_registers()
+
+  -- default patterns
+  recompute_patterns()
+
+  -- start sequencer
+  seq_clock = clock.run(run_sequencer)
+
+  -- redraw at 15fps
+  redraw_metro = metro.init()
+  redraw_metro.time = 1 / 15
+  redraw_metro.event = function()
+    redraw()
+  end
+  redraw_metro:start()
+end
+
+function key(n, z)
+  if z == 0 then return end
+
+  if n == 1 then
+    page = page == 1 and 2 or 1
+  elseif n == 2 then
+    reset_sequences()
+  elseif n == 3 then
+    randomize_registers()
+  end
+  redraw()
+end
+
+function enc(n, d)
+  if n == 1 then
+    tempo = util.clamp(tempo + d, 40, 240)
+    params:set("clock_tempo", tempo)
+    cc[8] = math.floor(util.linlin(40, 240, 0, 127, tempo))
+  elseif n == 2 then
+    flip_prob = util.clamp(flip_prob + d * 0.02, 0, 1)
+    cc[4] = math.floor(flip_prob * 127)
+  elseif n == 3 then
+    root = (root + d) % 12
+    if root < 0 then root = root + 12 end
+    cc[6] = math.floor(root / 11 * 127)
+  end
+  redraw()
 end
 
 function redraw()
   screen.clear()
-  screen.move(10,40)
-  screen.text("1. lfo rate: "..string.format("%.1f",rate))
-  screen.move(10,50)
-  --screen.text(": "..string.format("%.3f",slew))
+  screen.aa(0)
+  screen.line_width(1)
 
-  screen.move(2,40)
-  screen.line_rel(0,scope[1]*-4)
-  screen.stroke()
-  screen.move(4,40)
-  screen.line_rel(0,scope[2]*-4)
-  screen.stroke()
+  if page == 1 then
+    draw_sequences()
+  else
+    draw_faders()
+  end
 
   screen.update()
 end
 
-function key(n,z)
-  if n==2 and z==1 then
-    rate = 0.1 + math.random(10)/10
-    crow.output[1].action = "lfo("..rate..",4)"
-    crow.output[1].execute()
-  elseif n==3 and z==1 then
-    crow.output[2].action = "{to(8,0.15),to(0,1)}"
-    crow.output[2].execute()
+function cleanup()
+  if redraw_metro then redraw_metro:stop() end
+  if seq_clock then clock.cancel(seq_clock) end
+
+  -- all notes off
+  if midi_out_dev then
+    for ch = 1, 2 do
+      if seq[ch].last_note then
+        midi_out_dev:note_off(seq[ch].last_note, 0, ch)
+      end
+      midi_out_dev:cc(123, 0, ch)
+    end
   end
-  redraw()
 end
