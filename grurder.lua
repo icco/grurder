@@ -8,7 +8,7 @@
 -- outputs two voices to mmMidi
 --
 -- E1 tempo  E2 probability  E3 root
--- K1 page   K2 reset        K3 random
+-- K2 page   K3 reset/random (short/long)
 
 local util = require "util"
 
@@ -38,6 +38,7 @@ local page = 1
 local cc = {0, 0, 0, 0, 0, 0, 0, 0}
 local redraw_metro = nil
 local seq_clock = nil
+local k3_held = false
 
 local step_count = 8
 local pulse_count = 5
@@ -458,14 +459,19 @@ function init()
 end
 
 function key(n, z)
-  if z == 0 then return end
-
-  if n == 1 then
+  if n == 2 and z == 1 then
     page = page == 1 and 2 or 1
-  elseif n == 2 then
-    reset_sequences()
   elseif n == 3 then
-    randomize_registers()
+    if z == 1 then
+      k3_held = util.time()
+    else
+      local held = util.time() - k3_held
+      if held > 0.5 then
+        randomize_registers()
+      else
+        reset_sequences()
+      end
+    end
   end
   redraw()
 end

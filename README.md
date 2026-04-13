@@ -75,9 +75,9 @@ The script is fully usable without 8mu via the norns hardware:
 - **E1**: Tempo
 - **E2**: Flip probability
 - **E3**: Root note
-- **K1**: Toggle between sequence view and fader view
-- **K2**: Reset sequences
-- **K3**: Randomize pitch registers
+- **K2**: Toggle between sequence view and fader view
+- **K3** (short press): Reset sequences
+- **K3** (long press): Randomize pitch registers
 
 ## Screens
 
