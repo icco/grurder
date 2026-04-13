@@ -1,0 +1,25 @@
+name: lint
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: write
+jobs:
+  luacheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Install luacheck
+        run: sudo apt-get install -y lua-check
+      - name: Run luacheck
+        run: luacheck *.lua --no-color
+      - uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: 'style: luacheck fixes'
+          file_pattern: '*.lua'
