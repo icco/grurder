@@ -11,6 +11,7 @@
 -- K2 page   K3 reset/random (short/long)
 -- 8mu faders 1-4: seq1 (steps/pulses/rot/prob)
 -- 8mu faders 5-8: seq2 (steps/pulses/rot/prob)
+-- 8mu tilt X/Y: velocity for seq1/seq2
 
 local util = require "util"
 
@@ -44,6 +45,8 @@ local midi_in_dev = nil -- luacheck: no unused
 local midi_out_dev = nil
 local page = 1
 local cc = {0, 0, 0, 0, 0, 0, 0, 0}
+local tilt = {64, 64}  -- 8mu accelerometer X/Y (CC 14/15), center=64
+local velocity = {100, 100}  -- derived velocity per sequence
 local redraw_metro = nil
 local seq_clock = nil
 local k3_held = false
@@ -188,6 +191,15 @@ function handle_midi(data)
   local msg = midi.to_msg(data)
 
   if msg.type == "cc" then
+    -- 8mu accelerometer tilt: CC 14 = X (seq1 vel), CC 15 = Y (seq2 vel)
+    if msg.cc == 14 then
+      tilt[1] = msg.val
+      velocity[1] = math.floor(util.linlin(0, 127, 30, 127, msg.val))
+    elseif msg.cc == 15 then
+      tilt[2] = msg.val
+      velocity[2] = math.floor(util.linlin(0, 127, 30, 127, msg.val))
+    end
+
     local idx = msg.cc - 33
     if idx >= 1 and idx <= 8 then
       cc[idx] = msg.val
@@ -251,9 +263,9 @@ function note_off(ch, note)
   end
 end
 
-function note_on(ch, note)
+function note_on(ch, note, vel)
   if midi_out_dev then
-    midi_out_dev:note_on(note, 100, ch)
+    midi_out_dev:note_on(note, vel or 100, ch)
   end
 end
 
@@ -276,10 +288,11 @@ function advance(n)
     local midi_note = register_to_note(s.register, sc, root, octave_range)
     -- clamp to valid midi range
     midi_note = util.clamp(midi_note, 0, 127)
-    note_on(n, midi_note)
+    local vel = velocity[n]
+    note_on(n, midi_note, vel)
     s.last_note = midi_note
-    -- push to history for display
-    s.history[#s.history + 1] = midi_note
+    -- push to history for display (note + velocity)
+    s.history[#s.history + 1] = {note = midi_note, vel = vel}
   else
     s.history[#s.history + 1] = nil
   end
@@ -312,8 +325,15 @@ function draw_sequences()
   screen.move(127, 7)
   screen.text_right(tempo .. "bpm o" .. octave_range)
 
+  -- velocity indicators per sequence
+  screen.level(4)
+  screen.move(1, 14)
+  screen.text("v" .. velocity[1])
+  screen.move(127, 14)
+  screen.text_right("v" .. velocity[2])
+
   -- seq 1
-  draw_seq_lane(seq[1], 10, 34)
+  draw_seq_lane(seq[1], 17, 34)
 
   -- divider
   screen.level(2)
@@ -338,21 +358,30 @@ function draw_seq_lane(s, y_top, y_bottom)
   local lo, hi = 127, 0
   for i = start, #hist do
     if hist[i] then
-      if hist[i] < lo then lo = hist[i] end
-      if hist[i] > hi then hi = hist[i] end
+      local n = hist[i].note
+      if n < lo then lo = n end
+      if n > hi then hi = n end
     end
   end
   if lo == hi then lo = lo - 6; hi = hi + 6 end
 
   for i = 0, count - 1 do
-    local note = hist[start + i]
+    local entry = hist[start + i]
     local x = i * col_w
-    local brightness = s.mute and 2 or (i == count - 1 and 15 or util.linlin(0, count - 1, 3, 10, i))
 
-    if note then
+    if entry then
+      local note = entry.note
+      local vel = entry.vel or 100
+      -- velocity modulates brightness: low vel = dimmer
+      local vel_scale = util.linlin(30, 127, 0.4, 1.0, vel)
+      local base_brightness = s.mute and 2 or (i == count - 1 and 15 or util.linlin(0, count - 1, 3, 10, i))
+      local brightness = math.floor(base_brightness * vel_scale)
+
       local pitch_y = util.linlin(lo, hi, y_bottom - 2, y_top + 2, note)
-      screen.level(math.floor(brightness))
-      screen.rect(x + 1, math.floor(pitch_y), col_w - 2, 3)
+      -- velocity also affects bar height: vel scales from 2 to 5px
+      local bar_h = math.floor(util.linlin(30, 127, 2, 5, vel))
+      screen.level(brightness)
+      screen.rect(x + 1, math.floor(pitch_y) - math.floor(bar_h / 2), col_w - 2, bar_h)
       screen.fill()
     else
       -- rest: small dot
@@ -393,11 +422,18 @@ function draw_faders()
   screen.move(68, 7)
   screen.text("seq2")
 
+  -- tilt/velocity display
+  screen.level(4)
+  screen.move(32, 7)
+  screen.text_center("v" .. velocity[1])
+  screen.move(96, 7)
+  screen.text_center("v" .. velocity[2])
+
   local labels = {"stp", "pls", "rot", "prb", "stp", "pls", "rot", "prb"}
   local bar_w = 12
   local gap = (128 - bar_w * 8) / 9
-  local base_y = 56
-  local max_h = 42
+  local base_y = 50
+  local max_h = 36
 
   for i = 1, 8 do
     local x = math.floor(gap * i + bar_w * (i - 1))
@@ -414,8 +450,22 @@ function draw_faders()
 
     -- label
     screen.level(6)
-    screen.move(x + math.floor(bar_w / 2), 63)
+    screen.move(x + math.floor(bar_w / 2), 57)
     screen.text_center(labels[i])
+  end
+
+  -- tilt bars at bottom
+  local tilt_y = 60
+  local tilt_max_w = 60
+  for i = 1, 2 do
+    local tx = i == 1 and 2 or 66
+    local tw = math.floor(tilt[i] / 127 * tilt_max_w)
+    screen.level(3)
+    screen.rect(tx, tilt_y, tilt_max_w, 3)
+    screen.stroke()
+    screen.level(10)
+    screen.rect(tx, tilt_y, tw, 3)
+    screen.fill()
   end
 end
 
