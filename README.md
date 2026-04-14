@@ -88,9 +88,9 @@ The script is fully usable without 8mu via the norns hardware:
 - Velocity is fixed at 100 (suitable for gate-based eurorack setups)
 ### Norns Params Menu
 
-- **midi in** — MIDI input device (1–16, default 1)
-- **midi out** — MIDI output device (1–16, default 2)
-- **scale** — maj, min, M.pent, m.pent, dor, phry, lyd, mixo
+- **midi in** — MIDI input device (shows device name, default port 1)
+- **midi out** — MIDI output device (shows device name, default port 2)
+- **scale** — major, minor, major pent, minor pent, dorian, phrygian, lydian, mixolydian
 
 ## References & Further Reading
 

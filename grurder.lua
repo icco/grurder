@@ -27,7 +27,13 @@ local scales = {
 }
 
 local scale_names = {
-  "maj", "min", "M.pent", "m.pent",
+  "major", "minor", "major pent", "minor pent",
+  "dorian", "phrygian", "lydian", "mixolydian"
+}
+
+-- short names for screen display
+local scale_short = {
+  "maj", "min", "M.pnt", "m.pnt",
   "dor", "phry", "lyd", "mixo"
 }
 
@@ -302,7 +308,7 @@ function draw_sequences()
   screen.move(1, 7)
   screen.text("grurder")
   screen.move(64, 7)
-  screen.text_center(note_names[root + 1] .. " " .. scale_names[scale_idx])
+  screen.text_center(note_names[root + 1] .. " " .. scale_short[scale_idx])
   screen.move(127, 7)
   screen.text_right(tempo .. "bpm o" .. octave_range)
 
@@ -416,19 +422,28 @@ end
 
 -- norns callbacks
 
+function midi_device_names()
+  local names = {}
+  for i = 1, #midi.vports do
+    local name = midi.vports[i].name or ("port " .. i)
+    names[i] = i .. ": " .. name
+  end
+  return names
+end
+
 function init()
   math.randomseed(os.time())
 
   -- params
   params:add_separator("grurder")
 
-  params:add_number("midi_in_device", "midi in", 1, 16, 1)
+  params:add_option("midi_in_device", "midi in", midi_device_names(), 1)
   params:set_action("midi_in_device", function(val)
     midi_in_dev = midi.connect(val)
     midi_in_dev.event = handle_midi
   end)
 
-  params:add_number("midi_out_device", "midi out", 1, 16, 2)
+  params:add_option("midi_out_device", "midi out", midi_device_names(), 2)
   params:set_action("midi_out_device", function(val)
     midi_out_dev = midi.connect(val)
   end)
