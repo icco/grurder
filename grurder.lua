@@ -14,22 +14,13 @@
 -- 8mu tilt X/Y: velocity for seq1/seq2
 
 local util = require "util"
+local musicutil = require "musicutil"
+local er = require "er"
 
--- scales as semitone intervals from root
-local scales = {
-  {0, 2, 4, 5, 7, 9, 11},     -- major
-  {0, 2, 3, 5, 7, 8, 10},     -- minor
-  {0, 2, 4, 7, 9},            -- major pentatonic
-  {0, 2, 3, 5, 7},            -- minor pentatonic
-  {0, 2, 3, 5, 7, 9, 10},    -- dorian
-  {0, 1, 3, 5, 7, 8, 10},    -- phrygian
-  {0, 2, 4, 6, 7, 9, 11},    -- lydian
-  {0, 2, 4, 5, 7, 9, 10},    -- mixolydian
-}
-
-local scale_names = {
-  "major", "minor", "major pent", "minor pent",
-  "dorian", "phrygian", "lydian", "mixolydian"
+-- scale types referencing musicutil.SCALES by name
+local scale_types = {
+  "Major", "Natural Minor", "Major Pentatonic", "Minor Pentatonic",
+  "Dorian", "Phrygian", "Lydian", "Mixolydian"
 }
 
 -- short names for screen display
@@ -37,8 +28,6 @@ local scale_short = {
   "maj", "min", "M.pnt", "m.pnt",
   "dor", "phry", "lyd", "mixo"
 }
-
-local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
 
 -- state
 local midi_in_dev = nil -- luacheck: no unused
@@ -82,73 +71,6 @@ local seq = {
 }
 
 
--- bjorklund algorithm
--- attempt to evenly distribute pulses across steps
--- see: Toussaint (2005) "The Euclidean Algorithm Generates Traditional Musical Rhythms"
-
-function bjorklund(steps, pulses)
-  if pulses >= steps then
-    local p = {}
-    for i = 1, steps do p[i] = true end
-    return p
-  end
-  if pulses <= 0 then
-    local p = {}
-    for i = 1, steps do p[i] = false end
-    return p
-  end
-
-  local groups = {}
-  for i = 1, steps do
-    if i <= pulses then
-      groups[i] = {true}
-    else
-      groups[i] = {false}
-    end
-  end
-
-  while true do
-    local remainder = #groups - pulses
-    if remainder <= 1 then break end
-    local new_groups = {}
-    local merge_count = math.min(pulses, remainder)
-    for i = 1, merge_count do
-      local g = {}
-      for _, v in ipairs(groups[i]) do g[#g + 1] = v end
-      for _, v in ipairs(groups[#groups - merge_count + i]) do g[#g + 1] = v end
-      new_groups[i] = g
-    end
-    -- leftover groups that weren't merged
-    if pulses > remainder then
-      for i = merge_count + 1, pulses do
-        new_groups[#new_groups + 1] = groups[i]
-      end
-    end
-    groups = new_groups
-    pulses = merge_count
-  end
-
-  local result = {}
-  for _, g in ipairs(groups) do
-    for _, v in ipairs(g) do
-      result[#result + 1] = v
-    end
-  end
-  return result
-end
-
-function rotate_pattern(pattern, offset)
-  local n = #pattern
-  if n == 0 then return pattern end
-  local r = {}
-  for i = 1, n do
-    local src = ((i - 1 + offset) % n) + 1
-    r[i] = pattern[src]
-  end
-  return r
-end
-
-
 -- shift register / turing machine
 -- 16-bit register evolves each step: shift right, conditionally flip the
 -- wrapping bit. at probability 0 the pattern locks; at 1 it's fully random.
@@ -164,19 +86,17 @@ function shift_register_step(reg, prob)
   return reg
 end
 
-function register_to_note(reg, scale_tbl, root_note, oct_range)
-  local deg = (reg % #scale_tbl) + 1
-  local interval = scale_tbl[deg]
-  local oct = math.floor((reg / #scale_tbl) % oct_range)
-  return root_note + 36 + interval + (oct * 12)
+function register_to_note(reg, root_note, oct_range)
+  local scale_notes = musicutil.generate_scale(root_note + 36, scale_types[scale_idx], oct_range)
+  local idx = (reg % #scale_notes) + 1
+  return scale_notes[idx]
 end
 
 
 -- pattern computation
 
 function recompute_pattern(n)
-  local p = bjorklund(step_count[n], pulse_count[n])
-  seq[n].pattern = rotate_pattern(p, rotation[n])
+  seq[n].pattern = er.gen(pulse_count[n], step_count[n], rotation[n])
 end
 
 function recompute_patterns()
@@ -284,8 +204,7 @@ function advance(n)
 
   if pat[s.pos] and not s.mute then
     s.register = shift_register_step(s.register, flip_prob[n])
-    local sc = scales[scale_idx] or scales[1]
-    local midi_note = register_to_note(s.register, sc, root, octave_range)
+    local midi_note = register_to_note(s.register, root, octave_range)
     -- clamp to valid midi range
     midi_note = util.clamp(midi_note, 0, 127)
     local vel = velocity[n]
@@ -321,7 +240,7 @@ function draw_sequences()
   screen.move(1, 7)
   screen.text("grurder")
   screen.move(64, 7)
-  screen.text_center(note_names[root + 1] .. " " .. scale_short[scale_idx])
+  screen.text_center(musicutil.note_num_to_name(root, false) .. " " .. scale_short[scale_idx])
   screen.move(127, 7)
   screen.text_right(tempo .. "bpm o" .. octave_range)
 
@@ -498,7 +417,7 @@ function init()
     midi_out_dev = midi.connect(val)
   end)
 
-  params:add_option("scale", "scale", scale_names, 1)
+  params:add_option("scale", "scale", scale_types, 1)
   params:set_action("scale", function(val)
     scale_idx = val
   end)
