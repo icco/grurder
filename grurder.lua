@@ -51,20 +51,8 @@ local rotation = {0, 0}
 local flip_prob = {0.0, 0.0}
 
 local seq = {
-  {
-    pattern = {},
-    register = 0,
-    pos = 0,
-    mute = false,
-    history = {},
-  },
-  {
-    pattern = {},
-    register = 0,
-    pos = 0,
-    mute = false,
-    history = {},
-  },
+  {pattern = {}, register = 0, pos = 0, mute = false},
+  {pattern = {}, register = 0, pos = 0, mute = false},
 }
 
 
@@ -200,18 +188,11 @@ function advance(n)
     local midi_note = util.clamp(register_to_note(s.register, root, octave_range), 0, 127)
     local vel = velocity[n]
     note_on(n, midi_note, vel)
-    s.history[#s.history + 1] = {note = midi_note, vel = vel}
     local gate_sec = clock.get_beat_sec() * 0.25 * 0.5
     clock.run(function()
       clock.sleep(gate_sec)
       note_off(n, midi_note)
     end)
-  else
-    s.history[#s.history + 1] = nil
-  end
-
-  while #s.history > 32 do
-    table.remove(s.history, 1)
   end
 end
 
@@ -227,158 +208,97 @@ end
 
 -- screen: sequence view
 
-function draw_sequences()
-  -- header
-  screen.level(6)
-  screen.move(1, 7)
-  screen.text("grurder")
-  screen.move(64, 7)
-  screen.text_center(musicutil.note_num_to_name(root, false) .. " " .. scale_short[scale_idx])
-  screen.move(127, 7)
-  screen.text_right(math.floor(clock.get_tempo()) .. "bpm o" .. octave_range)
+function draw_seq_blocks(n, y)
+  local s = seq[n]
+  local pat = s.pattern
+  local steps = #pat
+  if steps == 0 then return end
 
-  -- velocity indicators per sequence
-  screen.level(4)
-  screen.move(1, 14)
-  screen.text("v" .. velocity[1])
-  screen.move(127, 14)
-  screen.text_right("v" .. velocity[2])
+  local x_off = 12
+  local block_w = math.floor((128 - x_off) / steps)
+  local block_h = 11
 
-  -- seq 1
-  draw_seq_lane(seq[1], 17, 34)
+  screen.level(s.mute and 2 or 5)
+  screen.move(1, y + 8)
+  screen.text(n .. ":")
 
-  -- divider
-  screen.level(2)
-  screen.move(0, 36)
-  screen.line(128, 36)
-  screen.stroke()
-
-  -- seq 2
-  draw_seq_lane(seq[2], 38, 62)
-end
-
-function draw_seq_lane(s, y_top, y_bottom)
-  local h = y_bottom - y_top
-  local hist = s.history
-  local count = math.min(#hist, 16)
-  if count == 0 then return end
-
-  local col_w = math.floor(128 / 16)
-  local start = #hist - count + 1
-
-  -- find pitch range in history for scaling
-  local lo, hi = 127, 0
-  for i = start, #hist do
-    if hist[i] then
-      local n = hist[i].note
-      if n < lo then lo = n end
-      if n > hi then hi = n end
-    end
-  end
-  if lo == hi then lo = lo - 6; hi = hi + 6 end
-
-  for i = 0, count - 1 do
-    local entry = hist[start + i]
-    local x = i * col_w
-
-    if entry then
-      local note = entry.note
-      local vel = entry.vel or 100
-      -- velocity modulates brightness: low vel = dimmer
-      local vel_scale = util.linlin(30, 127, 0.4, 1.0, vel)
-      local base_brightness = s.mute and 2 or (i == count - 1 and 15 or util.linlin(0, count - 1, 3, 10, i))
-      local brightness = math.floor(base_brightness * vel_scale)
-
-      local pitch_y = util.linlin(lo, hi, y_bottom - 2, y_top + 2, note)
-      -- velocity also affects bar height: vel scales from 2 to 5px
-      local bar_h = math.floor(util.linlin(30, 127, 2, 5, vel))
-      screen.level(brightness)
-      screen.rect(x + 1, math.floor(pitch_y) - math.floor(bar_h / 2), col_w - 2, bar_h)
+  for i = 1, steps do
+    local x = x_off + (i - 1) * block_w
+    if i == s.pos then
+      screen.level(15)
+      screen.rect(x, y, block_w - 1, block_h)
+      screen.fill()
+    elseif pat[i] then
+      screen.level(s.mute and 2 or 5)
+      screen.rect(x, y, block_w - 1, block_h)
       screen.fill()
     else
-      -- rest: small dot
       screen.level(s.mute and 1 or 2)
-      screen.rect(x + 3, y_top + math.floor(h / 2), 2, 2)
-      screen.fill()
-    end
-  end
-
-  -- step indicator dots along the bottom
-  if #s.pattern > 0 then
-    for i = 1, #s.pattern do
-      if s.pattern[i] then
-        screen.level(i == s.pos and 15 or 3)
-      else
-        screen.level(1)
-      end
-      local dot_x = math.floor((i - 1) * (128 / #s.pattern))
-      screen.rect(dot_x + 1, y_bottom, 2, 1)
-      screen.fill()
+      screen.rect(x, y, block_w - 1, block_h)
+      screen.stroke()
     end
   end
 
   if s.mute then
-    screen.level(4)
-    screen.move(64, y_top + math.floor(h / 2) + 2)
-    screen.text_center("MUTE")
+    screen.level(10)
+    screen.move(64, y + 8)
+    screen.text_center("mute")
   end
 end
 
-
--- screen: fader view
-
-function draw_faders()
+function draw_sequences()
   screen.level(6)
   screen.move(1, 7)
-  screen.text("seq1")
-  screen.move(68, 7)
-  screen.text("seq2")
+  screen.text(musicutil.note_num_to_name(root, false) .. " " .. scale_short[scale_idx])
+  screen.move(64, 7)
+  screen.text_center(math.floor(clock.get_tempo()) .. " bpm")
+  screen.move(127, 7)
+  screen.text_right("o" .. octave_range)
 
-  -- tilt/velocity display
-  screen.level(4)
-  screen.move(32, 7)
-  screen.text_center("v" .. velocity[1])
-  screen.move(96, 7)
-  screen.text_center("v" .. velocity[2])
+  draw_seq_blocks(1, 10)
 
-  local labels = {"stp", "pls", "rot", "prb", "stp", "pls", "rot", "prb"}
-  local bar_w = 12
-  local gap = (128 - bar_w * 8) / 9
-  local base_y = 50
-  local max_h = 36
+  screen.level(2)
+  screen.move(0, 27)
+  screen.line(128, 27)
+  screen.stroke()
 
-  for i = 1, 8 do
-    local x = math.floor(gap * i + bar_w * (i - 1))
-    local h = math.floor(cc[i] / 127 * max_h)
+  draw_seq_blocks(2, 30)
 
-    screen.level(12)
-    screen.rect(x, base_y - h, bar_w, h)
-    screen.fill()
+  screen.level(3)
+  screen.move(1, 62)
+  screen.text("s" .. step_count[1] .. " p" .. pulse_count[1] .. " r" .. rotation[1] .. " v" .. velocity[1])
+  screen.move(127, 62)
+  screen.text_right("s" .. step_count[2] .. " p" .. pulse_count[2] .. " r" .. rotation[2] .. " v" .. velocity[2])
+end
 
-    -- outline
-    screen.level(3)
-    screen.rect(x, base_y - max_h, bar_w, max_h)
-    screen.stroke()
 
-    -- label
-    screen.level(6)
-    screen.move(x + math.floor(bar_w / 2), 57)
-    screen.text_center(labels[i])
-  end
+-- screen: params view
 
-  -- tilt bars at bottom
-  local tilt_y = 60
-  local tilt_max_w = 60
-  for i = 1, 2 do
-    local tx = i == 1 and 2 or 66
-    local tw = math.floor(tilt[i] / 127 * tilt_max_w)
-    screen.level(3)
-    screen.rect(tx, tilt_y, tilt_max_w, 3)
-    screen.stroke()
+function draw_params()
+  local function row(label, v1, v2, y)
+    screen.level(4)
+    screen.move(1, y)
+    screen.text(label)
     screen.level(10)
-    screen.rect(tx, tilt_y, tw, 3)
-    screen.fill()
+    screen.move(80, y)
+    screen.text_center(v1)
+    screen.move(127, y)
+    screen.text_right(v2)
   end
+
+  screen.level(6)
+  screen.move(1, 7)
+  screen.text("params")
+  screen.move(80, 7)
+  screen.text_center("seq1")
+  screen.move(127, 7)
+  screen.text_right("seq2")
+
+  row("steps",  step_count[1],  step_count[2],  18)
+  row("pulses", pulse_count[1], pulse_count[2], 28)
+  row("rotate", rotation[1],    rotation[2],    38)
+  row("prob",   math.floor(flip_prob[1] * 100) .. "%", math.floor(flip_prob[2] * 100) .. "%", 48)
+  row("vel",    velocity[1],    velocity[2],    58)
 end
 
 
@@ -474,7 +394,7 @@ function redraw()
   if page == 1 then
     draw_sequences()
   else
-    draw_faders()
+    draw_params()
   end
 
   screen.update()
