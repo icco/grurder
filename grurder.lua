@@ -55,7 +55,6 @@ local seq = {
     pattern = {},
     register = 0,
     pos = 0,
-    last_note = nil,
     mute = false,
     history = {},
   },
@@ -63,7 +62,6 @@ local seq = {
     pattern = {},
     register = 0,
     pos = 0,
-    last_note = nil,
     mute = false,
     history = {},
   },
@@ -195,29 +193,22 @@ function advance(n)
   local pat = s.pattern
   if #pat == 0 then return end
 
-  -- kill previous note
-  if s.last_note then
-    note_off(n, s.last_note)
-    s.last_note = nil
-  end
-
   s.pos = (s.pos % #pat) + 1
 
   if pat[s.pos] and not s.mute then
     s.register = shift_register_step(s.register, flip_prob[n])
-    local midi_note = register_to_note(s.register, root, octave_range)
-    -- clamp to valid midi range
-    midi_note = util.clamp(midi_note, 0, 127)
+    local midi_note = util.clamp(register_to_note(s.register, root, octave_range), 0, 127)
     local vel = velocity[n]
     note_on(n, midi_note, vel)
-    s.last_note = midi_note
-    -- push to history for display (note + velocity)
     s.history[#s.history + 1] = {note = midi_note, vel = vel}
+    clock.run(function()
+      clock.sleep(clock.get_beat_sec() * 0.4)
+      note_off(n, midi_note)
+    end)
   else
     s.history[#s.history + 1] = nil
   end
 
-  -- keep history bounded
   while #s.history > 32 do
     table.remove(s.history, 1)
   end
@@ -495,9 +486,6 @@ function cleanup()
   -- all notes off
   if midi_out_dev then
     for ch = 1, 2 do
-      if seq[ch].last_note then
-        midi_out_dev:note_off(seq[ch].last_note, 0, ch)
-      end
       midi_out_dev:cc(123, 0, ch)
     end
   end
