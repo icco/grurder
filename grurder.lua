@@ -33,9 +33,7 @@ local scale_short = {
 local midi_in_dev = nil -- luacheck: no unused
 local midi_out_dev = nil
 local page = 1
-local cc = {0, 0, 0, 0, 0, 0, 0, 0}
-local tilt = {64, 64}  -- 8mu accelerometer X/Y (CC 14/15), center=64
-local velocity = {100, 100}  -- derived velocity per sequence
+local velocity = {100, 100}  -- derived velocity per sequence (from 8mu tilt)
 local redraw_metro = nil
 local seq_clock = nil
 local k3_held = false
@@ -98,16 +96,13 @@ function handle_midi(data)
   if msg.type == "cc" then
     -- 8mu accelerometer tilt: CC 14 = X (seq1 vel), CC 15 = Y (seq2 vel)
     if msg.cc == 14 then
-      tilt[1] = msg.val
       velocity[1] = math.floor(util.linlin(0, 127, 30, 127, msg.val))
     elseif msg.cc == 15 then
-      tilt[2] = msg.val
       velocity[2] = math.floor(util.linlin(0, 127, 30, 127, msg.val))
     end
 
     local idx = msg.cc - 33
     if idx >= 1 and idx <= 8 then
-      cc[idx] = msg.val
       apply_cc(idx, msg.val)
     end
 
