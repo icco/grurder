@@ -7,7 +7,7 @@
 -- 8mu faders control generation
 -- outputs two voices to mmMidi
 --
--- E1 tempo  E2 octave  E3 root
+-- E1 (unused)  E2 octave  E3 root
 -- K2 page   K3 reset/random (short/long)
 -- 8mu faders 1-4: seq1 (steps/pulses/rot/prob)
 -- 8mu faders 5-8: seq2 (steps/pulses/rot/prob)
@@ -150,6 +150,8 @@ function apply_cc(idx, val)
 
   if param == 1 then
     step_count[n] = math.floor(util.linlin(0, 127, 4, 16, val) + 0.5)
+    pulse_count[n] = math.min(pulse_count[n], step_count[n])
+    rotation[n] = math.min(rotation[n], step_count[n] - 1)
     recompute_pattern(n)
   elseif param == 2 then
     pulse_count[n] = math.floor(util.linlin(0, 127, 1, step_count[n], val) + 0.5)
@@ -427,6 +429,12 @@ function init()
   midi_in_dev.event = handle_midi
   midi_out_dev = midi.connect(params:get("midi_out_device"))
 
+  -- sync tempo display with clock (handles external changes too)
+  tempo = clock.get_tempo()
+  clock.tempo_change_handler = function(bpm)
+    tempo = bpm
+  end
+
   -- seed the registers
   randomize_registers()
 
@@ -464,10 +472,7 @@ function key(n, z)
 end
 
 function enc(n, d)
-  if n == 1 then
-    tempo = util.clamp(tempo + d, 40, 240)
-    params:set("clock_tempo", tempo)
-  elseif n == 2 then
+  if n == 2 then
     octave_range = util.clamp(octave_range + d, 1, 4)
   elseif n == 3 then
     root = (root + d) % 12
