@@ -43,7 +43,6 @@ local k3_held = false
 local scale_idx = 1
 local root = 0
 local octave_range = 2
-local tempo = 120
 
 -- per-sequence parameters (indexed 1=seq1, 2=seq2)
 local step_count = {8, 8}
@@ -244,7 +243,7 @@ function draw_sequences()
   screen.move(64, 7)
   screen.text_center(musicutil.note_num_to_name(root, false) .. " " .. scale_short[scale_idx])
   screen.move(127, 7)
-  screen.text_right(tempo .. "bpm o" .. octave_range)
+  screen.text_right(math.floor(clock.get_tempo()) .. "bpm o" .. octave_range)
 
   -- velocity indicators per sequence
   screen.level(4)
@@ -428,12 +427,6 @@ function init()
   midi_in_dev = midi.connect(params:get("midi_in_device"))
   midi_in_dev.event = handle_midi
   midi_out_dev = midi.connect(params:get("midi_out_device"))
-
-  -- sync tempo display with clock (handles external changes too)
-  tempo = clock.get_tempo()
-  clock.tempo_change_handler = function(bpm)
-    tempo = bpm
-  end
 
   -- seed the registers
   randomize_registers()
