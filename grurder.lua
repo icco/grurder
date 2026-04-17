@@ -201,8 +201,9 @@ function advance(n)
     local vel = velocity[n]
     note_on(n, midi_note, vel)
     s.history[#s.history + 1] = {note = midi_note, vel = vel}
+    local gate_sec = clock.get_beat_sec() * 0.25 * 0.5
     clock.run(function()
-      clock.sleep(clock.get_beat_sec() * 0.4)
+      clock.sleep(gate_sec)
       note_off(n, midi_note)
     end)
   else
